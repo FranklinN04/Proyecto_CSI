@@ -36,12 +36,12 @@ try:
             maliciosos = sum(int(x) for x in row[2:])
             malicious_dict[time_key] = maliciosos
 except Exception as e:
-    log.error(f"Error cargando CSV malicioso: {e}")
+    flag_log and log.error(f"Error cargando CSV malicioso: {e}")
     exit()
 
 # Verificación de archivo principal
 if not os.path.exists(file_csv):
-    log.error(f"El archivo no existe en la ruta especificada: {file_csv}")
+    flag_log and log.error(f"El archivo no existe en la ruta especificada: {file_csv}")
     exit()
 
 # Columnas Output
@@ -129,6 +129,8 @@ try:
                  break
 
 except StopIteration:
-    log.info("Fin del archivo CSV alcanzado.")
+    flag_log and log.info("Fin del archivo CSV alcanzado.")
 except Exception as e:
-    log.error(f"Ocurrió un error inesperado: {e}", exc_info=True)
+    flag_log and log.error(f"Ocurrió un error inesperado: {e}", exc_info=True)
+
+flag_log and log.info("Csv generado completamente")
