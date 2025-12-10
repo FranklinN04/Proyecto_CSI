@@ -18,10 +18,4 @@ def setup_logger(name_log, path_file_log):
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
-    # 2. Handler de Consola (StreamHandler)
-    # Esto es lo que te permite ver el log en "tiempo real" en la terminal
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-
     return logger

@@ -1,26 +1,21 @@
 import csv
 import os
-
 from utils.utils_log import setup_logger
 
 # =================
 # Configuración
 # =================
 flag_log = True
-fecha_limite = "2016-03-21"
+fecha_limite = "2016-03-22"
 
 # Rutas de archivos
-file_csv = "/Users/franciscoruizmontesdeoca/Documents/Bases_de_datos/TFG_Dataset/uniq/march.week4.csv"
-malicious_csv = "/Users/franciscoruizmontesdeoca/Documents/Bases_de_datos/TFG_Dataset/attack_ts_march_week4.csv"
+file_csv = "/Users/franciscoruizmontesdeoca/Documents/Data_Set/TFG_Dataset/uniq/march.week4.csv"
+malicious_csv = "/Users/franciscoruizmontesdeoca/Documents/Data_Set/TFG_Dataset/attack_ts_march_week4.csv"
 
 # Output
-metric_csv = f"metricas_{fecha_limite}.csv"
-log_file = f"log_proceso_{fecha_limite}.log"
+metric_csv = f"Metricas/metricas_{fecha_limite}.csv"
+log_file = f"Logs/log_proceso_{fecha_limite}.log"
 
-# =================
-# Inicializar Logger
-# =================
-# Esto crea el archivo .log y prepara la consola
 log = setup_logger("Log", log_file)
 
 # =================
@@ -28,23 +23,23 @@ log = setup_logger("Log", log_file)
 # =================
 malicious_dict = {}
 try:
-    with open(malicious_csv, newline='') as f_m:
-        reader_m = csv.reader(f_m)
-        header_m = next(reader_m)
-        for row in reader_m:
-            time_key = str(row[0][:16])
-            maliciosos = sum(int(x) for x in row[2:])
-            malicious_dict[time_key] = maliciosos
+    if os.path.exists(malicious_csv):
+        with open(malicious_csv, newline='') as f_m:
+            reader_m = csv.reader(f_m)
+            header_m = next(reader_m, None)
+            for row in reader_m:
+                if row:
+                    time_key = str(row[0][:16])
+                    maliciosos = sum(int(x) for x in row[2:])
+                    malicious_dict[time_key] = maliciosos
 except Exception as e:
     flag_log and log.error(f"Error cargando CSV malicioso: {e}")
     exit()
 
-# Verificación de archivo principal
 if not os.path.exists(file_csv):
-    flag_log and log.error(f"El archivo no existe en la ruta especificada: {file_csv}")
+    flag_log and log.error(f"El archivo no existe: {file_csv}")
     exit()
 
-# Columnas Output
 col_names = [
     "timestamp_id", "total_bytes", "total_packets", "n_ips_org", "n_ips_dst",
     "flows_TCP", "flows_UDP", "flows_ICMP", "flows_RST",
@@ -60,20 +55,33 @@ try:
         writer = csv.writer(mf)
 
         # Header
-        next(reader)
+        next(reader, None)
         writer.writerow(col_names)
 
-        fila = next(reader)
+        # Leemos la primera fila de datos
+        fila = next(reader, None)
+
+        # 1. BUCLE PARA SALTAR LO QUE NO SEA LA FECHA
+        # Usamos fila[0][:10] en vez de split() para ahorrar memoria y tiempo
+        while fila is not None and fila[0][:10] != fecha_limite:
+            fila = next(reader, None)
+            # Quitamos el log por fila para no saturar la consola/disco
+
+        if fila is None:
+            flag_log and log.warning(f"Se terminó el archivo y no se encontró la fecha: {fecha_limite}")
+        else:
+            flag_log and log.info(f"Fecha encontrada: {fecha_limite}. Iniciando proceso.")
+
         timestamp_counter = 0
 
-        # Bucle principal por fecha
-        while fila[0].split()[0] == fecha_limite:
+        # 2. BUCLE PRINCIPAL (Mientras sea la fecha indicada)
+        while fila is not None and fila[0][:10] == fecha_limite:
 
-            # Capturamos el minuto actual que vamos a procesar
-            current_time_str = fila[0].split()[1]
-            current_datetime_key = fila[0][:16] # YYYY-MM-DD HH:MM para buscar en dict
+            # Capturamos el minuto actual (YYYY-MM-DD HH:MM) usando slicing
+            # fila[0] es "2016-03-24 10:00:00", [:16] toma hasta el minuto
+            current_datetime_key = fila[0][:16]
 
-            # Inicializar acumuladores para ESTE minuto
+            # Inicializar acumuladores
             flow_count = 0
             total_bytes = 0
             total_packets = 0
@@ -85,33 +93,38 @@ try:
             flows_ICMP = 0
             flows_RST = 0
 
-            # Procesar todas las filas que pertenezcan al mismo minuto (HH:MM)
-            while fila[0].split()[1] == current_time_str:
-                flow_count += int(fila[11])
-                total_bytes += int(fila[10])
-                total_packets += int(fila[9])
-                total_duration += float(fila[1])
-
-                ips_org.add(fila[2])
-                ips_dst.add(fila[3])
-
-                # Optimizacion de booleanos a int
-                flows_TCP += (1 if fila[6] == 'TCP' else 0)
-                flows_UDP += (1 if fila[6] == 'UDP' else 0)
-                flows_ICMP += (1 if fila[6] == 'ICMP' else 0)
-                flows_RST += (1 if 'R' in fila[7] else 0)
-
+            # 3. BUCLE INTERNO (Mientras sea el mismo minuto)
+            # Comparamos la clave de tiempo actual con la de la fila
+            while fila is not None and fila[0][:16] == current_datetime_key:
                 try:
-                    fila = next(reader)
-                except StopIteration:
-                    # Se acabó el archivo CSV
-                    break
+                    # Acumulamos datos
+                    flow_count += int(fila[11])
+                    total_bytes += int(fila[10])
+                    total_packets += int(fila[9])
+                    total_duration += float(fila[1])
 
-            # Calculamos métricas del minuto que ACABA de terminar
+                    ips_org.add(fila[2])
+                    ips_dst.add(fila[3])
+
+                    proto = fila[6]
+                    if proto == 'TCP': flows_TCP += 1
+                    elif proto == 'UDP': flows_UDP += 1
+                    elif proto == 'ICMP': flows_ICMP += 1
+
+                    if 'R' in fila[7]: flows_RST += 1
+
+                    # Avanzamos a la siguiente fila
+                    fila = next(reader, None)
+
+                except ValueError:
+                    # Si hay una fila corrupta, la saltamos pero intentamos seguir
+                    fila = next(reader, None)
+                    continue
+
+            # --- FIN DEL MINUTO: Escribimos resultados ---
             media_duration_flow = total_duration / flow_count if flow_count > 0 else 0
             media_bytes_flow = total_bytes / flow_count if flow_count > 0 else 0
 
-            # Usamos la key del tiempo que procesamos, no de la fila actual (que ya es el siguiente minuto)
             package_malicious = malicious_dict.get(current_datetime_key, 0)
 
             timestamp_counter += 1
@@ -120,17 +133,12 @@ try:
                 flows_TCP, flows_UDP, flows_ICMP, flows_RST,
                 media_duration_flow, media_bytes_flow, package_malicious
             ]
-
             writer.writerow(row_output)
 
+            # El bucle externo se encargará de verificar si seguimos en la fecha correcta
+            # o si el archivo (fila) se ha terminado (None).
 
-            # Si se acabó el archivo en el bucle interno, salir del externo también
-            if fila[0].split()[1] == current_time_str:
-                 break
-
-except StopIteration:
-    flag_log and log.info("Fin del archivo CSV alcanzado.")
 except Exception as e:
     flag_log and log.error(f"Ocurrió un error inesperado: {e}", exc_info=True)
 
-flag_log and log.info("Csv generado completamente")
+flag_log and log.info("Proceso finalizado.")
