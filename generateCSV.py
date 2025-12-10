@@ -1,16 +1,14 @@
 import csv
 import os
 from utils.utils_log import setup_logger
+from cryptography.fernet import Fernet
+from collections import defaultdict
 
 # =================
 # Configuración
 # =================
 flag_log = True
-fecha_limite = "2016-03-22"
-
-# Rutas de archivos
-file_csv = "/Users/franciscoruizmontesdeoca/Documents/Data_Set/TFG_Dataset/uniq/march.week4.csv"
-malicious_csv = "/Users/franciscoruizmontesdeoca/Documents/Data_Set/TFG_Dataset/attack_ts_march_week4.csv"
+fecha_limite = "2016-03-21"
 
 # Output
 metric_csv = f"Metricas/metricas_{fecha_limite}.csv"
@@ -19,22 +17,53 @@ log_file = f"Logs/log_proceso_{fecha_limite}.log"
 log = setup_logger("Log", log_file)
 
 # =================
+key = os.environ["SECRET_KEY"].encode()
+fernet = Fernet(key)
+
+with open("utils/config.enc", "rb") as f:
+    encrypted_data = f.read()
+
+# Rutas de archivos
+file_csv = fernet.decrypt(encrypted_data).decode()+"/uniq/march.week4.csv"
+malicious_csv = fernet.decrypt(encrypted_data).decode()+"/attack_ts_march_week4.csv"
+malicious_malware_csv = [
+    fernet.decrypt(encrypted_data).decode()+"/blacklist_flows_cut_march_week4.csv",
+    fernet.decrypt(encrypted_data).decode()+"/spam_flows_cut_march_week4.csv",
+    fernet.decrypt(encrypted_data).decode()+"/sshscan_flows_cut_march_week4.csv",
+    fernet.decrypt(encrypted_data).decode()+"/udpscan_flows_cut_march_week4.csv"
+]
+
+# =================
 # Carga de Diccionario Malicioso
 # =================
-malicious_dict = {}
-try:
-    if os.path.exists(malicious_csv):
-        with open(malicious_csv, newline='') as f_m:
-            reader_m = csv.reader(f_m)
-            header_m = next(reader_m, None)
-            for row in reader_m:
-                if row:
-                    time_key = str(row[0][:16])
-                    maliciosos = sum(int(x) for x in row[2:])
-                    malicious_dict[time_key] = maliciosos
-except Exception as e:
-    flag_log and log.error(f"Error cargando CSV malicioso: {e}")
-    exit()
+malicious_dict = defaultdict(int)
+
+flag_log and log.info("Iniciando carga de archivos de malware...")
+
+for m_file in malicious_malware_csv:
+    try:
+        if os.path.exists(m_file):
+            flag_log and log.info(f"Procesando archivo malware: {os.path.basename(m_file)}")
+            
+            with open(m_file, newline='') as f_m:
+                reader_m = csv.reader(f_m, delimiter=';') 
+                for fila in reader_m:
+                    time_key = str(fila[0][:16])
+                    try:
+                        malicious_dict[time_key] += int(fila[8]) + int(fila[9])
+                    except ValueError:
+                        continue 
+        else:
+            flag_log and log.warning(f"Archivo no encontrado: {m_file}")
+
+    except Exception as e:
+        flag_log and log.error(f"Error procesando {m_file}: {e}")
+
+flag_log and log.info(f"Carga de malware completada. Minutos registrados: {len(malicious_dict)}")
+
+# ===========
+# Parte Principal
+# ===========
 
 if not os.path.exists(file_csv):
     flag_log and log.error(f"El archivo no existe: {file_csv}")
@@ -43,7 +72,7 @@ if not os.path.exists(file_csv):
 col_names = [
     "timestamp_id", "total_bytes", "total_packets", "n_ips_org", "n_ips_dst",
     "flows_TCP", "flows_UDP", "flows_ICMP", "flows_RST",
-    "media_duration_flow", "media_bytes/flow", "package_malicious"
+    "media_duration_flow", "media_bytes/flow", "porcent_malicious"
 ]
 
 # =================
@@ -61,11 +90,10 @@ try:
         # Leemos la primera fila de datos
         fila = next(reader, None)
 
-        # 1. BUCLE PARA SALTAR LO QUE NO SEA LA FECHA
-        # Usamos fila[0][:10] en vez de split() para ahorrar memoria y tiempo
+        #1. BUCLE PARA BUSCAR LA FECHA
         while fila is not None and fila[0][:10] != fecha_limite:
-            fila = next(reader, None)
-            # Quitamos el log por fila para no saturar la consola/disco
+            if len(fila) <= 0 or fila[0][:10] != fecha_limite:
+                fila = next(reader, None)
 
         if fila is None:
             flag_log and log.warning(f"Se terminó el archivo y no se encontró la fecha: {fecha_limite}")
@@ -94,7 +122,6 @@ try:
             flows_RST = 0
 
             # 3. BUCLE INTERNO (Mientras sea el mismo minuto)
-            # Comparamos la clave de tiempo actual con la de la fila
             while fila is not None and fila[0][:16] == current_datetime_key:
                 try:
                     # Acumulamos datos
@@ -126,17 +153,17 @@ try:
             media_bytes_flow = total_bytes / flow_count if flow_count > 0 else 0
 
             package_malicious = malicious_dict.get(current_datetime_key, 0)
+            porcent_malicious = round(package_malicious / total_packets * 100, 4) if total_packets > 0 else 0
 
             timestamp_counter += 1
             row_output = [
                 f"T{timestamp_counter}", total_bytes, total_packets, len(ips_org), len(ips_dst),
                 flows_TCP, flows_UDP, flows_ICMP, flows_RST,
-                media_duration_flow, media_bytes_flow, package_malicious
+                media_duration_flow, media_bytes_flow, porcent_malicious
             ]
             writer.writerow(row_output)
 
-            # El bucle externo se encargará de verificar si seguimos en la fecha correcta
-            # o si el archivo (fila) se ha terminado (None).
+
 
 except Exception as e:
     flag_log and log.error(f"Ocurrió un error inesperado: {e}", exc_info=True)
