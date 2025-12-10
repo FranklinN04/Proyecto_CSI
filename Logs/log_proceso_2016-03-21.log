@@ -1,8 +1,4 @@
-2025-12-10 16:29:09 - INFO - Iniciando carga de archivos de malware...
-2025-12-10 16:29:09 - INFO - Procesando archivo malware: blacklist_flows_cut_march_week4.csv
-2025-12-10 16:29:10 - INFO - Procesando archivo malware: spam_flows_cut_march_week4.csv
-2025-12-10 16:29:12 - INFO - Procesando archivo malware: sshscan_flows_cut_march_week4.csv
-2025-12-10 16:29:12 - INFO - Procesando archivo malware: udpscan_flows_cut_march_week4.csv
-2025-12-10 16:29:12 - INFO - Carga de malware completada. Minutos registrados: 9868
-2025-12-10 16:29:12 - INFO - Fecha encontrada: 2016-03-21. Iniciando proceso.
-2025-12-10 16:32:54 - INFO - Proceso finalizado.
+2025-12-10 17:17:34 - INFO - Iniciando carga de archivos de malware...
+2025-12-10 17:17:37 - INFO - Carga de malware completada.
+2025-12-10 17:17:37 - INFO - Fecha encontrada: 2016-03-21. Iniciando proceso.
+2025-12-10 17:21:32 - INFO - Proceso finalizado.

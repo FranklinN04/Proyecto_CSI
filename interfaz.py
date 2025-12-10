@@ -1,31 +1,41 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
-    page_title="Monitor de incidencias",
+    page_title="Monitor de Amenazas de Red",
     layout="wide",
     page_icon="🛡️",
     initial_sidebar_state="expanded"
 )
 
+# --- ESTILOS CSS PERSONALIZADOS ---
+st.markdown("""
+    <style>
+    .stMetric {
+        background-color: #0E1117;
+        padding: 15px;
+        border-radius: 5px;
+        border: 1px solid #262730;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 # --- TÍTULO Y HEADER ---
 col_logo, col_title = st.columns([1, 10])
 with col_logo:
     st.markdown("# 🛡️")
 with col_title:
-    st.markdown("# Monitor de Anomalías de Red y Detección de Intrusiones")
+    st.markdown("# Monitor de Anomalías: Desglose por Malware")
 
 st.markdown("---")
 
 # 1. CARGA DE DATOS (SIDEBAR)
 with st.sidebar:
     st.header("📂 Ingesta de Datos")
-    uploaded_file = st.file_uploader("Arrastra tu log CSV aquí", type=["csv"])
+    uploaded_file = st.file_uploader("Cargar métricas detalladas (CSV)", type=["csv"])
 
 
 if uploaded_file is not None:
@@ -34,165 +44,134 @@ if uploaded_file is not None:
 
         # --- VALIDACIÓN DE ESTRUCTURA ---
         required_columns = [
-            'timestamp_id', 'total_bytes', 'total_packets', 'n_ips_org',
-            'n_ips_dst', 'flows_TCP', 'flows_UDP', 'flows_ICMP', 'flows_RST',
-            'media_duration_flow', 'media_bytes/flow', 'package_malicious'
+            'timestamp_id', 'total_bytes', 'total_packets', 
+            'porcent_blacklist', 'porcent_spam', 'porcent_sshscan', 
+            'porcent_udpscan', 'porcent_malware_total'
         ]
 
         if not set(required_columns).issubset(df.columns):
-            st.error("❌ **Error de Formato de Archivo**")
-            st.markdown("El archivo cargado no cumple con el esquema de seguridad requerido.")
-            st.markdown("### 📋 Estructura Requerida (Copiar y Pegar)")
-
-            # Código estilizado para copiar
-            st.code("""timestamp_id,total_bytes,total_packets,n_ips_org,n_ips_dst,flows_TCP,flows_UDP,flows_ICMP,flows_RST,media_duration_flow,media_bytes/flow,package_malicious
-T1,13,40,2,6,4,2,0,0,0.023584821428571427,0.014508928571428572,1""", language="csv")
-
+            st.error("❌ **Error de Formato**")
+            st.markdown("El archivo no contiene las columnas de desglose de malware.")
             st.stop()
 
         # --- PROCESAMIENTO ---
-        with st.spinner('Analizando paquetes y flujos de red...'):
-            # Conversión Fechas
-            try:
-                df['fecha'] = pd.to_datetime(df['timestamp_id'])
-            except:
+        with st.spinner('Analizando vectores de ataque...'):
+            first_val = str(df['timestamp_id'].iloc[0])
+            
+            if first_val.startswith('T'):
                 start_date = pd.Timestamp.now().floor('min')
-                def limpiar_y_convertir(x):
-                    try:
-                        return int(str(x).upper().replace('T', ''))
-                    except: return 0
-                df['minutos_offset'] = df['timestamp_id'].apply(limpiar_y_convertir)
-                df['fecha'] = df['minutos_offset'].apply(lambda x: start_date + pd.Timedelta(minutes=x))
+                df['idx'] = df['timestamp_id'].astype(str).str.extract(r'(\d+)').astype(float).fillna(0).astype(int)
+                df['fecha'] = df['idx'].apply(lambda x: start_date + pd.Timedelta(minutes=x))
+            else:
+                # Solo si NO empieza por T intentamos convertir a fecha real
+                df['fecha'] = pd.to_datetime(df['timestamp_id'], errors='coerce')
 
             df = df.sort_values('fecha')
 
-            # Configuración
-            st.sidebar.markdown("---")
-            st.sidebar.subheader("⚙️ Parámetros de Detección")
-            umbral_rst = st.sidebar.slider("Sensibilidad RST (Escaneos)", 0, 100, 50)
+            # --- LÓGICA DE DETECCIÓN ---
+            def analizar_amenaza(row):
+                tipos_detectados = []
+                if row['porcent_blacklist'] > 0: tipos_detectados.append("Blacklist")
+                if row['porcent_spam'] > 0: tipos_detectados.append("Spam")
+                if row['porcent_sshscan'] > 0: tipos_detectados.append("SSH Scan")
+                if row['porcent_udpscan'] > 0: tipos_detectados.append("UDP Scan")
+                
+                pct_total = row['porcent_malware_total']
+                
+                if pct_total == 0: nivel = "🟢 Seguro"
+                elif pct_total < 5: nivel = "🟡 Bajo"
+                elif pct_total < 20: nivel = "🟠 Medio"
+                else: nivel = "🔴 Crítico"
 
-            # Lógica de Análisis
-            def analizar_fila(row):
-                alertas = []
-                nivel = "🟢 Normal"
+                desc = ", ".join(tipos_detectados) if tipos_detectados else "Tráfico Limpio"
+                return pd.Series([desc, nivel])
 
-                # Malware
-                val_malware = pd.to_numeric(row['package_malicious'], errors='coerce') or 0
-                if val_malware > 0:
-                    if val_malware == 1:
-                        alertas.append(f"Malware ({int(val_malware)})")
-                        nivel = "🟡 Media"
-                    elif val_malware == 2:
-                        alertas.append(f"Malware ({int(val_malware)})")
-                        nivel = "🟠 Alta"
-                    else:
-                        alertas.append(f"MALWARE MASIVO ({int(val_malware)})")
-                        nivel = "🔴 Crítica"
-
-                # Escaneo
-                val_rst = pd.to_numeric(row['flows_RST'], errors='coerce') or 0
-                if val_rst > umbral_rst and nivel == "🟢 Normal":
-                    alertas.append("Escaneo de Puertos")
-                    if "Crítica" not in nivel: nivel = "🟡 Media"
-
-                str_alertas = " + ".join(alertas) if alertas else "Tráfico Limpio"
-                return pd.Series([str_alertas, nivel])
-
-            df[['Detalle Alerta', 'Nivel de Amenaza']] = df.apply(analizar_fila, axis=1)
-            amenazas = df[(df['package_malicious'] > 0) | (df['Nivel de Amenaza'] != '🟢 Normal')]
+            df[['Tipo Amenaza', 'Severidad']] = df.apply(analizar_amenaza, axis=1)
+            incidentes = df[df['porcent_malware_total'] > 0].copy()
 
         # --- DASHBOARD VISUAL ---
-
-        # 1. Métricas Clave 
         col1, col2, col3, col4 = st.columns(4)
 
-        total_malware = int(df['package_malicious'].sum())
-        total_eventos = len(amenazas)
-        pico_max = df['package_malicious'].max() if not df.empty else 0
+        trafico_gb = df['total_bytes'].sum() / (1024**3)
+        max_infeccion = df['porcent_malware_total'].max()
+        cols_malware = ['porcent_blacklist', 'porcent_spam', 'porcent_sshscan', 'porcent_udpscan']
+        top_threat = df[cols_malware].mean().idxmax().replace('porcent_', '').upper()
+        pkts_maliciosos_estimados = int((df['total_packets'] * (df['porcent_malware_total']/100)).sum())
 
-        with col1:
-            st.metric("Total Paquetes", f"{len(df):,}")
-        with col2:
-            st.metric("Tráfico Analizado", f"{df['total_bytes'].sum()/1024:.2f} KB")
-        with col3:
-            st.metric("Paquetes Maliciosos", total_malware, delta=f"{total_malware}", delta_color="inverse")
-        with col4:
-            st.metric("Amenazas Activas", total_eventos, delta="Alerta" if total_eventos > 0 else "Seguro", delta_color="inverse")
+        with col1: st.metric("Tráfico Total", f"{trafico_gb:.2f} GB")
+        with col2: st.metric("Paquetes Maliciosos (Est.)", f"{pkts_maliciosos_estimados:,}")
+        with col3: st.metric("Pico de Infección", f"{max_infeccion:.2f}%", delta="Nivel de Tráfico Comprometido", delta_color="off")
+        with col4: st.metric("Amenaza Predominante", top_threat, delta="Tendencia Principal", delta_color="inverse")
 
         # 2. Gráfica Principal
-        st.subheader("📡 Telemetría en Tiempo Real")
+        st.subheader("📡 Composición del Tráfico Malicioso")
 
         fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-        # Área de tráfico
         fig.add_trace(
             go.Scatter(
-                x=df['fecha'], y=df['total_bytes'], name="Tráfico (Bytes)",
-                fill='tozeroy', line=dict(color='#00f2ff', width=1), mode='lines'
+                x=df['fecha'], y=df['total_packets'], name="Paquetes Totales",
+                line=dict(color='rgba(255, 255, 255, 0.3)', width=1, dash='dot'),
+                hoverinfo='skip'
             ), secondary_y=False
         )
 
-        # Barras de Ataque
-        fig.add_trace(
-            go.Bar(
-                x=df['fecha'], y=df['package_malicious'], name="Intrusión Detectada",
-                marker=dict(color='#ff2a2a', line=dict(color='#ff2a2a', width=1)), opacity=0.8
-            ), secondary_y=True
-        )
+        colors = {'blacklist': '#636EFA', 'spam': '#EF553B', 'sshscan': '#00CC96', 'udpscan': '#AB63FA'}
+        for m_type in ['blacklist', 'spam', 'sshscan', 'udpscan']:
+            col_name = f'porcent_{m_type}'
+            if df[col_name].sum() > 0:
+                fig.add_trace(
+                    go.Bar(
+                        x=df['fecha'], y=df[col_name], name=m_type.upper(),
+                        marker_color=colors.get(m_type, 'grey')
+                    ), secondary_y=True
+                )
 
         fig.update_layout(
-            template="plotly_dark",
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            font=dict(family="Roboto, sans-serif"),
-            hovermode="x unified",
-            legend=dict(orientation="h", y=1.1),
-            margin=dict(l=20, r=20, t=40, b=20),
-            height=400
+            barmode='stack', template="plotly_dark",
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+            legend=dict(orientation="h", y=1.1), height=450,
+            title_text="Paquetes Totales (Línea) vs % Composición de Malware (Barras)"
         )
-        fig.update_yaxes(title_text="Tráfico", showgrid=False, secondary_y=False)
-        fig.update_yaxes(title_text="Amenazas", showgrid=False, secondary_y=True)
+        fig.update_yaxes(title_text="Paquetes / Minuto", showgrid=False, secondary_y=False)
+        fig.update_yaxes(title_text="% Del Tráfico Malicioso", showgrid=True, range=[0, max(max_infeccion * 1.2, 5)], secondary_y=True)
 
-        st.plotly_chart(fig, use_container_width=True)
 
-        # 3. Tabla de Detalles (Mejorada)
-        if not amenazas.empty:
-            st.subheader("🚨 Registro de Incidentes")
+        try:
+            st.plotly_chart(fig, use_container_width=True)
+        except TypeError:
+            st.plotly_chart(fig)
 
-            # Usamos st.dataframe con configuración de columnas para visuales bonitos
+        # 3. Tabla Detallada
+        st.subheader("🚨 Desglose de Incidentes")
+        
+        if not incidentes.empty:
+            cols_to_show = ['fecha', 'Tipo Amenaza', 'Severidad', 'porcent_malware_total', 
+                           'porcent_blacklist', 'porcent_spam', 'porcent_sshscan', 'porcent_udpscan']
+            
+ 
             st.dataframe(
-                amenazas[['fecha', 'Detalle Alerta', 'package_malicious', 'flows_RST', 'Nivel de Amenaza']],
-                use_container_width=True,
+                incidentes[cols_to_show],
+                use_container_width=True, 
                 column_config={
-                    "fecha": st.column_config.DatetimeColumn("Timestamp", format="D MMM, HH:mm"),
-                    "package_malicious": st.column_config.ProgressColumn(
-                        "Magnitud Malware",
-                        help="Cantidad de paquetes maliciosos",
-                        format="%d",
-                        min_value=0,
-                        max_value=int(pico_max),
-                        width="medium"
+                    "fecha": st.column_config.DatetimeColumn("Tiempo", format="HH:mm"),
+                    "Tipo Amenaza": st.column_config.TextColumn("Vectores Detectados", width="medium"),
+                    "Severidad": st.column_config.TextColumn("Nivel", width="small"),
+                    "porcent_malware_total": st.column_config.ProgressColumn(
+                        "% Total Infectado", format="%.2f%%", min_value=0, max_value=100
                     ),
-                    "Nivel de Amenaza": st.column_config.TextColumn(
-                        "Severidad",
-                        width="small",
-                    ),
-                    "flows_RST": st.column_config.NumberColumn("Flujos RST")
+                    "porcent_blacklist": st.column_config.NumberColumn("% Blk", format="%.2f"),
+                    "porcent_spam": st.column_config.NumberColumn("% Spam", format="%.2f"),
+                    "porcent_sshscan": st.column_config.NumberColumn("% SSH", format="%.2f"),
+                    "porcent_udpscan": st.column_config.NumberColumn("% UDP", format="%.2f"),
                 },
                 hide_index=True
             )
         else:
-            st.success("✅ **Sistema Seguro:** No se detectaron anomalías en el periodo analizado.")
+            st.info("No se detectó tráfico malicioso en el archivo cargado.")
 
     except Exception as e:
-        st.error("⚠️ **Error de Procesamiento**")
-        st.markdown("No se pudo leer el archivo. Asegúrese de que no esté corrupto.")
+        st.error(f"⚠️ **Error Procesando Datos**: {e}")
 
 else:
-    # Pantalla de bienvenida vacía
-    st.markdown("""
-    <div style='text-align: center; color: #666; padding: 50px;'>
-        <h3>Esperando datos...</h3>
-        <p>Sube un archivo CSV en la barra lateral para iniciar el monitoreo.</p>
-    </div>
-    """, unsafe_allow_html=True)
+    st.info("👆 Por favor carga el archivo 'metricas_detalladas.csv' generado para visualizar el análisis.")

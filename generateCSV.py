@@ -23,34 +23,38 @@ fernet = Fernet(key)
 with open("utils/config.enc", "rb") as f:
     encrypted_data = f.read()
 
+
+base = fernet.decrypt(encrypted_data).decode()
+
 # Rutas de archivos
-file_csv = fernet.decrypt(encrypted_data).decode()+"/uniq/march.week4.csv"
-malicious_csv = fernet.decrypt(encrypted_data).decode()+"/attack_ts_march_week4.csv"
+file_csv = base+"/uniq/march.week4.csv"
+malicious_csv = base+"/attack_ts_march_week4.csv"
+
+nombres_malware = ["blacklist", "spam", "sshscan", "udpscan"]
 malicious_malware_csv = [
-    fernet.decrypt(encrypted_data).decode()+"/blacklist_flows_cut_march_week4.csv",
-    fernet.decrypt(encrypted_data).decode()+"/spam_flows_cut_march_week4.csv",
-    fernet.decrypt(encrypted_data).decode()+"/sshscan_flows_cut_march_week4.csv",
-    fernet.decrypt(encrypted_data).decode()+"/udpscan_flows_cut_march_week4.csv"
+    base+"/blacklist_flows_cut_march_week4.csv",
+    base+"/spam_flows_cut_march_week4.csv",
+    base+"/sshscan_flows_cut_march_week4.csv",
+    base+"/udpscan_flows_cut_march_week4.csv"
 ]
 
 # =================
 # Carga de Diccionario Malicioso
 # =================
-malicious_dict = defaultdict(int)
+malware_data = {nombre: defaultdict(int) for nombre in nombres_malware}
 
 flag_log and log.info("Iniciando carga de archivos de malware...")
 
-for m_file in malicious_malware_csv:
+for nombre, m_file in zip(nombres_malware, malicious_malware_csv):
     try:
         if os.path.exists(m_file):
-            flag_log and log.info(f"Procesando archivo malware: {os.path.basename(m_file)}")
-            
             with open(m_file, newline='') as f_m:
                 reader_m = csv.reader(f_m, delimiter=';') 
                 for fila in reader_m:
-                    time_key = str(fila[0][:16])
+                    time_key = str(fila[0][:16]) # Clave: YYYY-MM-DD HH:MM
                     try:
-                        malicious_dict[time_key] += int(fila[8]) + int(fila[9])
+                        # Sumamos paquetes al tipo específico
+                        malware_data[nombre][time_key] += int(fila[8]) + int(fila[9])
                     except ValueError:
                         continue 
         else:
@@ -59,7 +63,7 @@ for m_file in malicious_malware_csv:
     except Exception as e:
         flag_log and log.error(f"Error procesando {m_file}: {e}")
 
-flag_log and log.info(f"Carga de malware completada. Minutos registrados: {len(malicious_dict)}")
+flag_log and log.info("Carga de malware completada.")
 
 # ===========
 # Parte Principal
@@ -72,8 +76,14 @@ if not os.path.exists(file_csv):
 col_names = [
     "timestamp_id", "total_bytes", "total_packets", "n_ips_org", "n_ips_dst",
     "flows_TCP", "flows_UDP", "flows_ICMP", "flows_RST",
-    "media_duration_flow", "media_bytes/flow", "porcent_malicious"
+    "media_duration_flow", "media_bytes/flow"
 ]
+
+for nombre in nombres_malware:
+    col_names.append(f"porcent_{nombre}")
+
+# Añadimos la columna del total general
+col_names.append("porcent_malware_total")
 
 # =================
 # Procesamiento Principal
@@ -92,8 +102,7 @@ try:
 
         #1. BUCLE PARA BUSCAR LA FECHA
         while fila is not None and fila[0][:10] != fecha_limite:
-            if len(fila) <= 0 or fila[0][:10] != fecha_limite:
-                fila = next(reader, None)
+            fila = next(reader, None)
 
         if fila is None:
             flag_log and log.warning(f"Se terminó el archivo y no se encontró la fecha: {fecha_limite}")
@@ -110,35 +119,32 @@ try:
             current_datetime_key = fila[0][:16]
 
             # Inicializar acumuladores
-            flow_count = 0
-            total_bytes = 0
-            total_packets = 0
-            total_duration = 0.0
+            stats = {
+                'flow_count': 0, 'total_bytes': 0, 'total_packets': 0, 'total_duration': 0.0,
+                'flows_TCP': 0, 'flows_UDP': 0, 'flows_ICMP': 0, 'flows_RST': 0
+            }
+
             ips_org = set()
             ips_dst = set()
-            flows_TCP = 0
-            flows_UDP = 0
-            flows_ICMP = 0
-            flows_RST = 0
 
             # 3. BUCLE INTERNO (Mientras sea el mismo minuto)
             while fila is not None and fila[0][:16] == current_datetime_key:
                 try:
                     # Acumulamos datos
-                    flow_count += int(fila[11])
-                    total_bytes += int(fila[10])
-                    total_packets += int(fila[9])
-                    total_duration += float(fila[1])
+                    stats['flow_count'] += int(fila[11])
+                    stats['total_bytes'] += int(fila[10])
+                    stats['total_packets'] += int(fila[9])
+                    stats['total_duration'] += float(fila[1])
 
                     ips_org.add(fila[2])
                     ips_dst.add(fila[3])
 
                     proto = fila[6]
-                    if proto == 'TCP': flows_TCP += 1
-                    elif proto == 'UDP': flows_UDP += 1
-                    elif proto == 'ICMP': flows_ICMP += 1
+                    if proto == 'TCP': stats['flows_TCP'] += 1
+                    elif proto == 'UDP': stats['flows_UDP'] += 1
+                    elif proto == 'ICMP': stats['flows_ICMP'] += 1
 
-                    if 'R' in fila[7]: flows_RST += 1
+                    if 'R' in fila[7]: stats['flows_RST'] += 1
 
                     # Avanzamos a la siguiente fila
                     fila = next(reader, None)
@@ -149,18 +155,44 @@ try:
                     continue
 
             # --- FIN DEL MINUTO: Escribimos resultados ---
-            media_duration_flow = total_duration / flow_count if flow_count > 0 else 0
-            media_bytes_flow = total_bytes / flow_count if flow_count > 0 else 0
-
-            package_malicious = malicious_dict.get(current_datetime_key, 0)
-            porcent_malicious = round(package_malicious / total_packets * 100, 4) if total_packets > 0 else 0
+            flow_cnt = stats['flow_count']
+            media_duration_flow = stats['total_duration'] / flow_cnt if flow_cnt > 0 else 0
+            media_bytes_flow = stats['total_bytes'] / flow_cnt if flow_cnt > 0 else 0
 
             timestamp_counter += 1
+            
+            # 2. Creamos la fila base con los datos de tráfico normal
             row_output = [
-                f"T{timestamp_counter}", total_bytes, total_packets, len(ips_org), len(ips_dst),
-                flows_TCP, flows_UDP, flows_ICMP, flows_RST,
-                media_duration_flow, media_bytes_flow, porcent_malicious
+                f"T{timestamp_counter}", 
+                stats['total_bytes'],   
+                stats['total_packets'], 
+                len(ips_org), len(ips_dst),
+                stats['flows_TCP'],     
+                stats['flows_UDP'],     
+                stats['flows_ICMP'],    
+                stats['flows_RST'],     
+                media_duration_flow, 
+                media_bytes_flow
             ]
+
+            # 3. Calculamos y añadimos los porcentajes de CADA tipo de malware
+            total_malware_packets = 0
+            total_pkts_minute = stats['total_packets']
+
+            for nombre in nombres_malware:
+                # Buscamos en el diccionario 
+                pkts_malware = malware_data[nombre].get(current_datetime_key, 0)
+                
+                # Acumulamos para el total general
+                total_malware_packets += pkts_malware
+
+                pct = round(pkts_malware / total_pkts_minute * 100, 4) if total_pkts_minute > 0 else 0
+                row_output.append(pct)
+
+            # 4. Calculamos y añadimos el Total General de Malware (última columna)
+            pct_total = round(total_malware_packets / total_pkts_minute * 100, 4) if total_pkts_minute > 0 else 0
+            row_output.append(pct_total)
+
             writer.writerow(row_output)
 
 
