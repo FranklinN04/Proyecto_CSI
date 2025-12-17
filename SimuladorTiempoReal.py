@@ -68,3 +68,4 @@ def simulador_controlado(ruta_origen, ruta_destino, delay_automatico=0.5):
 if __name__ == "__main__":
     
     simulador_controlado(ORIGEN, DESTINO, VELOCIDAD_AUTO)
+    

@@ -201,3 +201,4 @@ except Exception as e:
     flag_log and log.error(f"Ocurrió un error inesperado: {e}", exc_info=True)
 
 flag_log and log.info("Proceso finalizado.")
+

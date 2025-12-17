@@ -175,3 +175,4 @@ if uploaded_file is not None:
 
 else:
     st.info("👆 Por favor carga el archivo 'metricas_detalladas.csv' generado para visualizar el análisis.")
+    

@@ -19,3 +19,4 @@ def setup_logger(name_log, path_file_log):
     logger.addHandler(file_handler)
 
     return logger
+
