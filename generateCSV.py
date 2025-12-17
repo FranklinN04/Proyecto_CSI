@@ -8,7 +8,7 @@ from collections import defaultdict
 # Configuración
 # =================
 flag_log = True
-fecha_limite = "2016-03-21"
+fecha_limite = "2016-03-23"
 
 # Output
 metric_csv = f"Metricas/metricas_{fecha_limite}.csv"
